@@ -27,7 +27,7 @@ const msg = (o: Partial<NormalizedMessage> = {}): NormalizedMessage =>
   ({ kind: "message", igsid: "u1", timestamp: T + 100, ...o });
 
 let db: D1Database, client: FakeClient, engine: Engine;
-beforeEach(() => { db = makeTestDb(); client = new FakeClient(); engine = new Engine(db, client as never, fast()); });
+beforeEach(() => { db = makeTestDb(); client = new FakeClient(); engine = new Engine(db, client as any, fast()); });
 
 const openingBtn = () => (client.calls.privateReply[0] as { buttons: { title: string; payload: string }[] }).buttons[0]!;
 const followBtn = () => (client.calls.button[0] as { buttons: { title: string; payload: string }[] }).buttons[0]!;

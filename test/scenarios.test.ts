@@ -94,7 +94,7 @@ function campaign(over: Partial<Campaign> = {}): Campaign {
 class Sim {
   db = makeTestDb();
   client = new SimClient();
-  engine = new Engine(this.db, this.client as never, new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 }));
+  engine = new Engine(this.db, this.client as any, new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 }));
   private clock = Math.floor(Date.now() / 1000) + 10;
   private n = 0;
 

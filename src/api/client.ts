@@ -281,6 +281,17 @@ export class InstagramClient {
     return res.data ?? [];
   }
 
+  /**
+   * Check if a specific user follows this business account (strict verification).
+   * Note: This field is only available for users who have engaged with the business via messaging.
+   */
+  async isUserFollowingBusiness(igsid: string): Promise<boolean> {
+    const res = await this.get<{ is_user_follow_business?: boolean }>(`/${igsid}`, {
+      fields: "is_user_follow_business",
+    });
+    return res.is_user_follow_business ?? false;
+  }
+
   // NOTE: there is deliberately no getFollowersCount() here, and no follow check anywhere. No
   // Instagram API can tell you whether a specific person follows you — the scopes this app holds
   // (basic, manage_messages, manage_comments) expose no follower list and no relationship edge.

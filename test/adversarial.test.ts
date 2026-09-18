@@ -44,7 +44,7 @@ let engine: Engine;
 beforeEach(() => {
   db = makeTestDb();
   client = new FakeClient();
-  engine = new Engine(db, client as never, fastQueue());
+  engine = new Engine(db, client as any, fastQueue());
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

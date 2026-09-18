@@ -11,6 +11,7 @@ import type {
   NormalizedComment,
   NormalizedMessage,
   State,
+  Env,
 } from "../types";
 import { InstagramApiError } from "../api/client";
 import { commentTriggers, extractEmail } from "./match";
@@ -36,12 +37,15 @@ import {
   getAllConversations,
   getOpenConversations,
   isCommentProcessed,
+  kvGet,
+  kvSet,
   logEvent,
   markCommentProcessed,
   releaseSend,
   updateConversation,
 } from "../db";
 import type { ConversationRow } from "../db";
+import { generateSmartReply } from "./ai";
 
 // The gate is a nudge, not a check — nothing verifies the follow (no Instagram API can). The copy
 // carries all of the persuasion, which is why the button stays worded as an attestation: tapping
@@ -125,11 +129,9 @@ function pickRotating(texts: string[], seed: string): string {
 }
 
 export class Engine {
-  constructor(
-    private readonly db: D1Database,
-    private readonly client: InstagramClient,
-    private readonly queue: SendQueue,
-  ) {}
+  constructor(private readonly db: D1Database, private readonly client: InstagramClient, private readonly queue: SendQueue, private readonly env: Env) {}
+
+  
 
   // ---- comments ----
 

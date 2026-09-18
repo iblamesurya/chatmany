@@ -68,7 +68,7 @@ describe("migrating an existing database", () => {
     const { db, raw } = makeTestDbWithHandle(PREVIOUS);
     const client = new FakeClient();
     await upsertCampaign(db, campaign({ check_follow: true }), true);
-    const engine = new Engine(db, client as never, fast());
+    const engine = new Engine(db, client as any, fast());
 
     // They were sent their opening by the OLD code, and are sitting in AWAITING_TAP.
     seedOldRow(raw, "u1", "AWAITING_TAP");
@@ -90,7 +90,7 @@ describe("deploying BEFORE migrating — why the order matters", () => {
     const { db, raw } = makeTestDbWithHandle(PREVIOUS); // new code, old schema
     const client = new FakeClient();
     await upsertCampaign(db, campaign(), true);
-    const engine = new Engine(db, client as never, fast());
+    const engine = new Engine(db, client as any, fast());
 
     for (let tick = 0; tick < 3; tick++) {
       // The column the newest migration adds — update this when a later migration adds another.
@@ -114,7 +114,7 @@ describe("deploying BEFORE migrating — why the order matters", () => {
     await upsertCampaign(db, campaign(), true);
     seedOldRow(raw, "u1", "AWAITING_TAP");
 
-    const engine = new Engine(db, client as never, fast());
+    const engine = new Engine(db, client as any, fast());
     await engine.handleMessage(msg({ payload: "OPENING_TAP" }));
     expect((await getConversation(db, "u1", "c1"))?.state).toBe("DONE");
     expect(client.calls.text).toHaveLength(1);
@@ -126,7 +126,7 @@ describe("migrating BEFORE deploying — always safe", () => {
     const { db, raw } = makeTestDbWithHandle(); // fully migrated
     const client = new FakeClient();
     await upsertCampaign(db, campaign(), true);
-    await new Engine(db, client as never, fast()).handleComment(comment());
+    await new Engine(db, client as any, fast()).handleComment(comment());
 
     const row = raw.prepare("SELECT email_retries FROM conversations WHERE igsid = 'u1'").get();
     expect(row).toMatchObject({ email_retries: 0 });

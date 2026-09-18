@@ -73,7 +73,7 @@ let engine: Engine;
 beforeEach(async () => {
   db = makeTestDb();
   client = new FakeClient();
-  engine = new Engine(db, client.asClient(), fastQueue());
+  engine = new Engine(db, client as any, fastQueue());
 });
 
 async function counts(campaignId = "c1") {
@@ -468,7 +468,7 @@ describe("duplicate sends when a delivered message reports failure", () => {
   it("does not send the opening DM twice when the first send delivered but errored", async () => {
     const db = makeTestDb();
     const client = new FakeClient();
-    const engine = new Engine(db, client as never, fastQueue());
+    const engine = new Engine(db, client as any, fastQueue());
     await upsertCampaign(db, campaign(), true);
 
     // Poll 1: Instagram delivers the opening DM, then the connection drops.
@@ -486,7 +486,7 @@ describe("duplicate sends when a delivered message reports failure", () => {
   it("does not send the ORIGINAL follow gate twice when the first send delivered but errored", async () => {
     const db = makeTestDb();
     const client = new FakeClient();
-    const engine = new Engine(db, client as never, fastQueue());
+    const engine = new Engine(db, client as any, fastQueue());
     await upsertCampaign(db, campaign({ check_follow: true }), true);
     await engine.handleComment(comment());
 

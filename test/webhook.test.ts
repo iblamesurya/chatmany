@@ -69,7 +69,7 @@ async function envFor(mode: string, over: Partial<Campaign> = {}): Promise<Env> 
   client = new FakeClient();
   await upsertCampaign(db, campaign(over), true);
   runtime = {
-    engine: new Engine(db, client as never, new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 })),
+    engine: new Engine(db, client as any, new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 })),
     igUserId: "me",
   };
   return { DB: db, MODE: mode, APP_SECRET, WEBHOOK_VERIFY_TOKEN: "vtok" } as unknown as Env;
