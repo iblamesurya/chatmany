@@ -56,6 +56,16 @@ function message(over: Partial<NormalizedMessage> = {}): NormalizedMessage {
   return { kind: "message", igsid: "user1", timestamp: T + 100, ...over };
 }
 
+// A button PRESS, shaped the way a webhook delivers one: our postback payload and no visible text.
+// The payload is the only thing that distinguishes a press from a typed reply, so a test that means
+// "they tapped" has to say so with one of these — passing a bare message() means "they typed".
+function tap(over: Partial<NormalizedMessage> = {}): NormalizedMessage {
+  return message({ payload: "OPENING_TAP:c1", ...over });
+}
+function gateTap(over: Partial<NormalizedMessage> = {}): NormalizedMessage {
+  return message({ payload: "FOLLOW_CONFIRM:c1", ...over });
+}
+
 let db: D1Database;
 let client: FakeClient;
 let engine: Engine;
@@ -148,16 +158,16 @@ describe("message handling: full funnel", () => {
     await engine.handleComment(comment());
 
     // tap
-    await engine.handleMessage(message({ timestamp: T + 10 }));
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
     expect((await getConversation(db, "user1", "c1"))?.state).toBe("AWAITING_FOLLOW");
-    expect(client.calls.quick).toHaveLength(1); // follow gate sent
+    expect(client.calls.button).toHaveLength(1); // follow gate sent as a button template, not a chip
 
-    // follow confirm (matches follow button title)
-    await engine.handleMessage(message({ text: "✅ I followed", timestamp: T + 20 }));
+    // follow confirm — the gate's own postback payload, the only thing that counts as a press
+    await engine.handleMessage(gateTap({ timestamp: T + 20 }));
     const afterFollow = await getConversation(db, "user1", "c1");
     expect(afterFollow?.state).toBe("AWAITING_EMAIL");
     expect(afterFollow?.followed).toBe(1);
-    expect(client.calls.quick).toHaveLength(2); // email ask sent
+    expect(client.calls.quick).toHaveLength(1); // email ask (still a chip — the email chip is native)
 
     // email
     await engine.handleMessage(message({ text: "me@example.com", timestamp: T + 30 }));
@@ -181,7 +191,7 @@ describe("message handling: full funnel", () => {
   it("sends immediately when both gates are off", async () => {
     await upsertCampaign(db, campaign(), true); // no follow, no email
     await engine.handleComment(comment());
-    await engine.handleMessage(message({ timestamp: T + 10 }));
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
     const convo = await getConversation(db, "user1", "c1");
     expect(convo?.state).toBe("DONE");
     expect(client.calls.text).toHaveLength(1);
@@ -190,7 +200,7 @@ describe("message handling: full funnel", () => {
   it("a stale (already-consumed) message does not advance again", async () => {
     await upsertCampaign(db, campaign({ ask_email: true }), true);
     await engine.handleComment(comment());
-    await engine.handleMessage(message({ timestamp: T + 10 })); // tap → AWAITING_EMAIL
+    await engine.handleMessage(tap({ timestamp: T + 10 })); // tap → AWAITING_EMAIL
     expect((await getConversation(db, "user1", "c1"))?.state).toBe("AWAITING_EMAIL");
     // Replay an OLD message (timestamp before the last transition) — must be ignored.
     await engine.handleMessage(message({ timestamp: 1, text: "hello" }));
@@ -201,7 +211,7 @@ describe("message handling: full funnel", () => {
   it("an invalid reply at the email step re-asks and never delivers the resource", async () => {
     await upsertCampaign(db, campaign({ ask_email: true }), true);
     await engine.handleComment(comment());
-    await engine.handleMessage(message({ timestamp: T + 10 })); // tap → AWAITING_EMAIL
+    await engine.handleMessage(tap({ timestamp: T + 10 })); // tap → AWAITING_EMAIL
     expect(client.calls.quick).toHaveLength(1); // the initial email-ask
 
     // No "@" at all — not an email.
@@ -231,7 +241,7 @@ describe("message handling: full funnel", () => {
   it("a failed re-ask send leaves updated_at untouched so the same invalid reply retries cleanly", async () => {
     await upsertCampaign(db, campaign({ ask_email: true }), true);
     await engine.handleComment(comment());
-    await engine.handleMessage(message({ timestamp: T + 10 })); // tap → AWAITING_EMAIL
+    await engine.handleMessage(tap({ timestamp: T + 10 })); // tap → AWAITING_EMAIL
 
     client.failNext.quick = 1; // the re-ask send fails
     const bad = message({ text: "not an email", timestamp: T + 20 });
@@ -251,13 +261,13 @@ describe("downstream send failure strands nothing and retries cleanly (regressio
     await engine.handleComment(comment());
 
     client.failNext.quick = 1; // the email-ask send fails on first attempt
-    const tap = message({ timestamp: T + 10 });
-    await engine.handleMessage(tap);
+    const press = tap({ timestamp: T + 10 });
+    await engine.handleMessage(press);
     // No advance, no event, updated_at unchanged (so the same tap can retry).
     expect((await getConversation(db, "user1", "c1"))?.state).toBe("AWAITING_TAP");
     expect((await counts()).button_clicked).toBe(0);
 
-    await engine.handleMessage(tap); // retry with the same message
+    await engine.handleMessage(press); // retry with the same message
     expect((await getConversation(db, "user1", "c1"))?.state).toBe("AWAITING_EMAIL");
     expect((await counts()).button_clicked).toBe(1); // exactly once, not twice
   });
@@ -265,7 +275,7 @@ describe("downstream send failure strands nothing and retries cleanly (regressio
   it("failed delivery after email capture does not strand the contact", async () => {
     await upsertCampaign(db, campaign({ ask_email: true }), true);
     await engine.handleComment(comment());
-    await engine.handleMessage(message({ timestamp: T + 10 })); // → AWAITING_EMAIL
+    await engine.handleMessage(tap({ timestamp: T + 10 })); // → AWAITING_EMAIL
 
     client.failNext.text = 1; // delivery fails first time
     const email = message({ text: "me@example.com", timestamp: T + 20 });
@@ -305,9 +315,9 @@ describe("deleting a campaign stops it (QA: does delete actually stop an active 
   it("someone already mid-funnel stops receiving messages, with no crash, once their campaign is deleted", async () => {
     await upsertCampaign(db, campaign({ check_follow: true }), true);
     await engine.handleComment(comment());
-    await engine.handleMessage(message({ timestamp: T + 10 })); // tap → AWAITING_FOLLOW
+    await engine.handleMessage(tap({ timestamp: T + 10 })); // tap → AWAITING_FOLLOW
     expect((await getConversation(db, "user1", "c1"))?.state).toBe("AWAITING_FOLLOW");
-    expect(client.calls.quick).toHaveLength(1); // follow-gate already sent
+    expect(client.calls.button).toHaveLength(1); // follow-gate already sent
 
     await deleteCampaign(db, "c1"); // delete mid-funnel, exactly like clicking Delete in the UI
     // Delete cascades: their conversation row for c1 is gone too, not just orphaned in place —
@@ -317,7 +327,7 @@ describe("deleting a campaign stops it (QA: does delete actually stop an active 
     // The next inbound message from this same person must not crash and must not send anything —
     // getCampaign(campaign_id) resolves to null for a deleted campaign, and the engine skips it.
     await engine.handleMessage(message({ text: "✅ I followed", timestamp: T + 20 }));
-    expect(client.calls.quick).toHaveLength(1); // no additional send
+    expect(client.calls.button).toHaveLength(1); // no additional send
     expect(client.calls.text).toHaveLength(0); // resource never delivered
     expect(await getConversation(db, "user1", "c1")).toBeNull(); // still gone, nothing resurrected it
     const c = await counts();
@@ -380,6 +390,80 @@ describe("archiving a campaign (soft-delete)", () => {
 // Instagram already processed it) must not cause the same DM to be sent to the person twice.
 // The engine deliberately treats a thrown send as "never happened" so real failures retry —
 // but when the message actually landed, that retry is a duplicate the recipient sees.
+describe("follow gate is a button, not a quick-reply chip", () => {
+  it("sends the gate as a button template carrying our postback payload", async () => {
+    await upsertCampaign(db, campaign({ check_follow: true }), true);
+    await engine.handleComment(comment());
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
+
+    expect(client.calls.quick).toHaveLength(0); // no chip — chips vanish once they type or leave
+    const gate = client.calls.button[0] as { igsid: string; text: string; buttons: unknown[] };
+    expect(gate.igsid).toBe("user1");
+    expect(gate.text).toBe("follow first");
+    // Tagged with the campaign that sent it, so a press can be attributed to one funnel.
+    expect(gate.buttons).toEqual([{ type: "postback", title: "✅ I followed", payload: "FOLLOW_CONFIRM:c1" }]);
+  });
+
+  it("advances on the gate's own postback payload (webhook mode)", async () => {
+    await upsertCampaign(db, campaign({ check_follow: true }), true);
+    await engine.handleComment(comment());
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
+
+    await engine.handleMessage(message({ payload: "FOLLOW_CONFIRM:c1", timestamp: T + 20 }));
+    const convo = await getConversation(db, "user1", "c1");
+    expect(convo?.state).toBe("DONE");
+    expect(convo?.followed).toBe(1);
+  });
+
+  it("does not advance on a different button's payload", async () => {
+    await upsertCampaign(db, campaign({ check_follow: true }), true);
+    await engine.handleComment(comment());
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
+
+    await engine.handleMessage(message({ payload: "SOME_OTHER_BUTTON", timestamp: T + 20 }));
+    expect((await getConversation(db, "user1", "c1"))?.state).toBe("AWAITING_FOLLOW");
+    expect(client.calls.text).toHaveLength(0); // reward not delivered
+  });
+
+  // This used to assert the opposite — that typing anything passed the gate — on the grounds that
+  // polling never surfaces a payload. With a webhook callback registered a real press always
+  // carries one, so that rule was handing the reward to people who typed "what is this?" and never
+  // followed anybody. Typing now leaves them at the gate, and re-sends the button they missed.
+  it("does NOT advance on a plain typed reply — a reply is not a press", async () => {
+    await upsertCampaign(db, campaign({ check_follow: true }), true);
+    await engine.handleComment(comment());
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
+    const gatesAfterTap = client.calls.button.length;
+
+    await engine.handleMessage(message({ text: "i followed", timestamp: T + 20 }));
+
+    const convo = await getConversation(db, "user1", "c1");
+    expect(convo?.state).toBe("AWAITING_FOLLOW"); // still at the gate
+    expect(convo?.followed).toBe(0); // and NOT recorded as a follower
+    expect(client.calls.text).toHaveLength(0); // reward not delivered
+    expect((await counts()).follow_confirmed).toBe(0); // funnel not inflated
+    expect(client.calls.button).toHaveLength(gatesAfterTap); // and NO second gate — sent once, ever
+  });
+
+  it("never re-sends the gate, however much they type", async () => {
+    await upsertCampaign(db, campaign({ check_follow: true }), true);
+    await engine.handleComment(comment());
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
+    const base = client.calls.button.length;
+
+    await engine.handleMessage(message({ text: "what", timestamp: T + 20 }));
+    await engine.handleMessage(message({ text: "is", timestamp: T + 30 }));
+    await engine.handleMessage(message({ text: "this", timestamp: T + 40 }));
+
+    expect(client.calls.button).toHaveLength(base); // the gate is still in the thread; once is enough
+    expect((await getConversation(db, "user1", "c1"))?.state).toBe("AWAITING_FOLLOW");
+
+    // Silence is not a dead end — the press still works, by payload OR by its label echo.
+    await engine.handleMessage(message({ text: "✅ I followed", timestamp: T + 50 }));
+    expect((await getConversation(db, "user1", "c1"))?.state).toBe("DONE");
+  });
+});
+
 describe("duplicate sends when a delivered message reports failure", () => {
   it("does not send the opening DM twice when the first send delivered but errored", async () => {
     const db = makeTestDb();
@@ -399,19 +483,44 @@ describe("duplicate sends when a delivered message reports failure", () => {
     expect(client.calls.privateReply).toHaveLength(1);
   });
 
-  it("does not send the follow gate twice when the first send delivered but errored", async () => {
+  it("does not send the ORIGINAL follow gate twice when the first send delivered but errored", async () => {
     const db = makeTestDb();
     const client = new FakeClient();
     const engine = new Engine(db, client as never, fastQueue());
     await upsertCampaign(db, campaign({ check_follow: true }), true);
     await engine.handleComment(comment());
 
-    client.deliverThenFailNext.quick = 1;
-    await engine.handleMessage(message({ timestamp: T + 10 }));
-    const afterFirst = client.calls.quick.length;
-    expect(afterFirst).toBe(1); // follow gate reached the person
+    client.deliverThenFailNext.button = 1;
+    await engine.handleMessage(tap({ timestamp: T + 10 }));
+    expect(client.calls.button).toHaveLength(1); // the gate reached the person
 
-    await engine.handleMessage(message({ timestamp: T + 11 }));
-    expect(client.calls.quick).toHaveLength(afterFirst);
+    // The outcome was never learned, so it is treated as delivered: the funnel advances past the
+    // gate and the gate's send claim stays held, which is what makes a duplicate impossible.
+    const convo = await getConversation(db, "user1", "c1");
+    expect(convo?.state).toBe("AWAITING_FOLLOW");
+    expect(convo?.follow_retries).toBe(0);
+
+    // The same press arriving again — a double-tap, a Meta re-delivery, or the poller re-reading
+    // underneath the webhook — draws NOTHING. A press is not somebody stuck, and the gate we would
+    // re-send is already the newest message in the thread.
+    await engine.handleMessage(tap({ timestamp: T + 11 }));
+    expect(client.calls.button).toHaveLength(1);
+    expect((await getConversation(db, "user1", "c1"))?.follow_retries).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A contentless event — no text, no payload — is ambiguous at THIS layer: it is the shape of a
+// read receipt and equally the shape of a photo or voice note. The engine therefore treats it as a
+// reply, and the webhook route is what keeps receipts from reaching it (see webhook.test.ts).
+describe("contentless events", () => {
+  it("never advances a waiting funnel or stamps updated_at over a real press", async () => {
+    await upsertCampaign(db, campaign({ check_follow: true }), true);
+    await engine.handleComment(comment());
+    await engine.handleMessage(message({ timestamp: T + 10 }));
+    const convo = await getConversation(db, "user1", "c1");
+    expect(convo?.state).toBe("AWAITING_TAP");
+    expect(convo?.updated_at).toBe(convo?.created_at); // nothing stamped
+    expect(client.calls.button).toHaveLength(0);
   });
 });

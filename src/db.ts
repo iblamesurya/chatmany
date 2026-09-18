@@ -107,6 +107,12 @@ export async function deleteCampaign(db: D1Database, campaignId: string): Promis
     db.prepare("DELETE FROM conversations WHERE campaign_id = ?").bind(campaignId),
     db.prepare("DELETE FROM processed_comments WHERE campaign_id = ?").bind(campaignId),
     db.prepare("DELETE FROM events WHERE campaign_id = ?").bind(campaignId),
+    // Send claims too. Every claim key is `<what>:<campaign_id>:<who>`, so this drops exactly this
+    // campaign's. Leaving them behind used to be harmless only because the opening's key named the
+    // COMMENT; now that it names the person, a stale claim would silently block their opening DM
+    // if the campaign were deleted and recreated under the same id — which the builder does every
+    // time you re-use a campaign name. Deleting a campaign clears its dedup history completely.
+    db.prepare("DELETE FROM send_claims WHERE key LIKE ?").bind(`%:${campaignId}:%`),
   ]);
 }
 
@@ -196,7 +202,15 @@ export interface ConversationRow {
   username: string | null;
   email: string | null;
   followed: number;
+  /** How many times we have re-sent the follow gate to someone who pressed the wrong button.
+   *  Capped - see engine.resendFollowGate. (Column predates this use; it was the verify_follow_count
+   *  counter, which was removed. Reusing it means no new migration.) */
   follow_retries: number;
+  /** How many times we have re-asked for their email. Capped — see engine.resendEmailAsk. */
+  email_retries: number;
+  /** How many times we have re-sent the opening button to someone who replied without pressing it.
+   *  Capped — see engine.resendOpening. */
+  tap_retries: number;
   updated_at: number;
   created_at: number;
 }
@@ -212,6 +226,25 @@ export async function getConversation(
     .first<ConversationRow>();
 }
 
+/**
+ * EVERY conversation for a person, finished ones included.
+ *
+ * The engine needs the finished ones purely for their button labels: a completed funnel's button
+ * template is still sitting in the transcript and can still be pressed, and its label echo has to
+ * be recognised as ours. Filtering to open funnels first meant a DONE funnel's echo looked like a
+ * stranger's text to whichever funnel was still open, and nudged it.
+ */
+export async function getAllConversations(
+  db: D1Database,
+  igsid: string,
+): Promise<ConversationRow[]> {
+  const rows = await db
+    .prepare("SELECT * FROM conversations WHERE igsid = ?")
+    .bind(igsid)
+    .all<ConversationRow>();
+  return rows.results ?? [];
+}
+
 /** All non-terminal conversations for a person (a message may advance any of them). */
 export async function getOpenConversations(
   db: D1Database,
@@ -224,29 +257,37 @@ export async function getOpenConversations(
   return rows.results ?? [];
 }
 
+/**
+ * Create a person's funnel entry. Returns TRUE only if this call actually inserted it.
+ *
+ * The return value is what tells a caller whether it is the one that opened this funnel or merely
+ * raced another delivery of the same comment. Without it both logged comment_matched and
+ * opening_sent, so a single opening DM was counted twice on the dashboard.
+ */
 export async function createConversation(
   db: D1Database,
   igsid: string,
   campaignId: string,
   username: string | null,
   state: State,
-): Promise<void> {
+): Promise<boolean> {
   const ts = now();
-  await db
+  const res = await db
     .prepare(
       `INSERT OR IGNORE INTO conversations
-         (igsid, campaign_id, state, username, followed, follow_retries, updated_at, created_at)
-       VALUES (?, ?, ?, ?, 0, 0, ?, ?)`,
+         (igsid, campaign_id, state, username, followed, follow_retries, email_retries, tap_retries, updated_at, created_at)
+       VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?, ?)`,
     )
     .bind(igsid, campaignId, state, username, ts, ts)
     .run();
+  return (res.meta.changes ?? 0) > 0;
 }
 
 export async function updateConversation(
   db: D1Database,
   igsid: string,
   campaignId: string,
-  patch: Partial<Pick<ConversationRow, "state" | "email" | "followed" | "follow_retries">>,
+  patch: Partial<Pick<ConversationRow, "state" | "email" | "followed" | "email_retries" | "follow_retries" | "tap_retries">>,
 ): Promise<void> {
   const sets: string[] = [];
   const binds: unknown[] = [];
@@ -262,9 +303,17 @@ export async function updateConversation(
     sets.push("followed = ?");
     binds.push(patch.followed);
   }
+  if (patch.email_retries !== undefined) {
+    sets.push("email_retries = ?");
+    binds.push(patch.email_retries);
+  }
   if (patch.follow_retries !== undefined) {
     sets.push("follow_retries = ?");
     binds.push(patch.follow_retries);
+  }
+  if (patch.tap_retries !== undefined) {
+    sets.push("tap_retries = ?");
+    binds.push(patch.tap_retries);
   }
   if (sets.length === 0) return;
   sets.push("updated_at = ?");

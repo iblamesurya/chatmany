@@ -3,14 +3,14 @@
 // added later and served from this same Worker.
 
 import type { Env } from "./types";
-import { buildRuntime } from "./runtime";
+import { buildRuntime, pollIntervalSeconds } from "./runtime";
 import { pollComments } from "./poller/commentPoll";
 import { pollMessages } from "./poller/messagePoll";
 import { refreshTokenIfDue } from "./auth/refresh";
 import { claimPollSlot } from "./db";
 import { handleAuthorize, handleCallback, handleDisconnect, handleStatus } from "./routes/auth";
 import { handleConfigExport, handleConfigImport } from "./routes/config";
-import { handleWebhookEvent, handleWebhookVerify } from "./routes/webhook";
+import { handleWebhookAdmin, handleWebhookEvent, handleWebhookVerify } from "./routes/webhook";
 import { handleApi } from "./routes/api";
 import { isOwner, json } from "./routes/http";
 
@@ -26,8 +26,9 @@ export default {
     // --- public routes ---
     if (pathname === "/health") return json({ ok: true, mode: env.MODE });
 
-    // OAuth onboarding.
-    if (pathname === "/auth/authorize" && method === "GET") return handleAuthorize(env);
+    // OAuth onboarding. /auth/callback must stay public — Instagram itself calls it, with no
+    // owner token — so the takeover guard lives in handleCallback (it refuses to overwrite an
+    // existing connection with a different account). /auth/authorize is owner-only, below.
     if (pathname === "/auth/callback" && method === "GET") return handleCallback(env, url);
 
     // Webhook (only meaningful when MODE=webhook; verification is always safe to answer).
@@ -40,22 +41,29 @@ export default {
       return handleApi(env, req, url);
     }
     const ownerRoutes = new Set([
+      "/auth/authorize",
       "/auth/status",
       "/auth/disconnect",
       "/config/import",
       "/config/export",
       "/admin/poll",
+      "/admin/webhook",
     ]);
     if (ownerRoutes.has(pathname)) {
       if (!isOwner(req, url, env)) return json({ error: "unauthorized" }, 401);
+      if (pathname === "/auth/authorize" && method === "GET") return handleAuthorize(env);
       if (pathname === "/auth/status" && method === "GET") return handleStatus(env);
       if (pathname === "/auth/disconnect" && method === "POST") return handleDisconnect(env);
       if (pathname === "/config/import" && method === "POST") return handleConfigImport(env, req);
       if (pathname === "/config/export" && method === "GET") return handleConfigExport(env);
       // Manual poll trigger for testing without waiting for cron.
       if (pathname === "/admin/poll" && method === "POST") {
-        await runPoll(env);
+        await runPoll(env, pollIntervalSeconds(env) ?? 30);
         return json({ ok: true, ran: "poll" });
+      }
+      // Webhook subscription status / retry (see handleWebhookAdmin).
+      if (pathname === "/admin/webhook" && (method === "GET" || method === "POST")) {
+        return handleWebhookAdmin(env, method);
       }
       return json({ error: "method not allowed" }, 405);
     }
@@ -78,27 +86,38 @@ export default {
       return;
     }
     if (event.cron === POLL_CRON) {
-      // In webhook mode, push replaces polling; skip the comment/message polls.
-      if (env.MODE === "webhook") return;
-      await runPoll(env);
+      // In webhook mode this drops to a slow reconciliation sweep rather than stopping — see
+      // pollIntervalSeconds for why push alone loses leads. null means polling is off entirely.
+      const interval = pollIntervalSeconds(env);
+      if (interval === null) return;
+      await runPoll(env, interval);
     }
   },
 } satisfies ExportedHandler<Env>;
 
 /**
- * Run comment + message polls, honoring the configured poll interval (>= cron granularity).
+ * Run comment + message polls, honoring the caller's poll interval (>= cron granularity).
  * claimPollSlot is an atomic claim, not a plain check-then-act read/write — see its doc comment
  * in db.ts for why that distinction matters: it's what stops an overlapping cron tick or a
  * /admin/poll call racing the cron from both polling at once and double-sending a real DM.
  */
-async function runPoll(env: Env): Promise<void> {
-  const interval = Math.max(30, Number(env.POLL_INTERVAL_SECONDS) || 90);
+async function runPoll(env: Env, interval: number): Promise<void> {
   const claimed = await claimPollSlot(env.DB, interval);
   if (!claimed) return; // not due yet, or another invocation already claimed this slot
 
   const rt = await buildRuntime(env);
   if (!rt) return;
 
-  await pollComments(rt, env.DB);
-  await pollMessages(rt, env.DB);
+  // Isolated so one poll can never starve the other. pollComments used to run first with no
+  // guard, which meant a throw there silently skipped the message poll for that whole tick.
+  try {
+    await pollComments(rt, env.DB);
+  } catch (e) {
+    console.warn(`[chatmany] pollComments failed: ${e instanceof Error ? e.message : e}`);
+  }
+  try {
+    await pollMessages(rt, env.DB);
+  } catch (e) {
+    console.warn(`[chatmany] pollMessages failed: ${e instanceof Error ? e.message : e}`);
+  }
 }

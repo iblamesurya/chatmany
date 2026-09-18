@@ -73,14 +73,19 @@ Start by telling me what I need to have ready before we begin.
 
 ## Setup
 
-**Read this first.** Setup takes about 45 minutes. It has four parts, and **they must be done in this order**, because Part 3 needs a web address that doesn't exist until Part 2 creates it:
+> **Already have chatmany running?** Don't work through this again — see
+> **[Updating an existing install](#updating-an-existing-install)**. It takes about five minutes.
+
+**Read this first.** Setup takes about 45 minutes. It has six parts, and **they must be done in this order**, because Part 3 needs a web address that doesn't exist until Part 2 creates it:
 
 | Part | What you do | Where |
 |---|---|---|
 | **1** | Create a Meta app and copy two values out of it | Meta's website |
 | **2** | Put chatmany online, get your web address | Your computer's terminal |
-| **3** | Give that address back to Meta, then Publish | Meta's website |
+| **3** | Give that address back to Meta, turn on instant delivery, then Publish | Meta's website |
 | **4** | Connect your Instagram account | Your browser |
+| **5** | Build your first campaign | Your chatmany dashboard |
+| **6** | Confirm instant delivery is on | Your computer's terminal |
 
 You do not need to know how to code. Every terminal command is written out to copy and paste.
 
@@ -94,6 +99,7 @@ You'll collect **five values** into that note as you go, and later steps refer t
 | `INSTAGRAM APP SECRET` | step 1.6 |
 | `DATABASE ID` | step 2.4 |
 | `OWNER TOKEN` | step 2.7 (you invent this one) |
+| `VERIFY TOKEN` | step 2.7 (you invent this one too) |
 | `MY ADDRESS` | step 2.8 |
 
 Keep that note until the very end.
@@ -284,6 +290,11 @@ database_id = "a1b2c3d4-5678-90ab-cdef-1234567890ab"
 
 Open the file `wrangler.toml`, which is inside the `chatmany` folder you just downloaded.
 
+> **You only need to change one line in this file: the database ID, below.** Everything else is
+> already set correctly. In particular, leave `MODE = "polling"` exactly as it is. Despite the name
+> it does not control whether delivery is instant — instant comes from step 3.5 — and changing it
+> to `"webhook"` is the most common way people accidentally make chatmany 15× slower.
+
 **Easiest way to find it:** in the same terminal you've been using, run this — it opens the exact right folder in a window, no hunting:
 
 ```bash
@@ -317,7 +328,7 @@ When it asks `Your database may not be available to serve requests during the mi
 
 You should see a small table with ✅ next to each migration.
 
-#### 2.7 — Set your three secret values
+#### 2.7 — Set your four secret values
 
 Run these **one at a time**. After each, the terminal waits for you to paste a value and press **Enter**.
 
@@ -353,6 +364,14 @@ This one you **make up yourself** — nothing to copy. It's the password for you
 **Make it at least 20 characters.** This single value is the only thing protecting your contacts, emails, and campaigns from anyone who finds your web address. Mash your keyboard, or use `xk29fJ3mQpz81LwT4nBv`.
 
 **Write it in your note as `OWNER TOKEN` before pressing Enter** — you cannot read it back later.
+
+```bash
+npx wrangler secret put WEBHOOK_VERIFY_TOKEN
+```
+
+Another one you **make up yourself**. Meta echoes this back to prove your web address really belongs to you, in step 3.5.
+
+Any long random string is fine — mash the keyboard again. **Write it in your note as `VERIFY TOKEN`**; you'll paste the exact same value into Meta shortly.
 
 > Got one wrong? Just run the same command again with a new value. It overwrites instantly.
 
@@ -433,7 +452,39 @@ It has its **own separate redirect URL field**. Paste **the exact same value** �
 
 > ⚠️ This is a genuinely separate setting from 3.3. Filling in one does not fill in the other, and both are required.
 
-#### 3.5 — Fill in the three legal URLs
+#### 3.5 — Turn on instant delivery
+
+You're already in the dashboard with your address in hand, so do this now. It is what makes a DM
+arrive a second or two after someone comments, instead of up to a minute later.
+
+In the left sidebar go to **Webhooks** → choose **Instagram**, then **Subscribe to this object**:
+
+| Field | What to paste |
+| --- | --- |
+| Callback URL | **`MY ADDRESS`** + `/webhook` |
+| Verify token | your **`VERIFY TOKEN`** from step 2.7, exactly |
+
+Click **Verify and save**. Meta immediately calls your worker to check the token; chatmany answers
+automatically, so this should just succeed.
+
+> **"The callback URL or verify token couldn't be validated."** The token here doesn't match the
+> one you set in 2.7, or the address is wrong. Re-run `npx wrangler secret put WEBHOOK_VERIFY_TOKEN`
+> with a fresh value and use that same value here.
+
+Then, in the field list that appears, tick **both**:
+
+- **`comments`** — this is what notices someone commenting
+- **`messages`** — this is what carries their button taps
+
+⚠️ **Both are required.** Ticking only `comments` means people get the opening DM and then nothing
+ever happens when they tap. Ticking only `messages` means nobody ever gets a DM at all. Neither
+failure shows an error anywhere.
+
+> **Leave `MODE = "polling"` in `wrangler.toml` alone.** It is not the switch for this, despite the
+> name — see [Part 6](#part-6--confirm-instant-delivery-is-on). Changing it will make things slower,
+> not faster.
+
+#### 3.6 — Fill in the three legal URLs
 
 In the **left sidebar**, click **App settings** → **Basic**.
 
@@ -449,7 +500,7 @@ Also upload an **App icon** — any square image, 1024×1024. Meta refuses to pu
 
 Click **Save changes** at the bottom.
 
-#### 3.6 — Publish the app
+#### 3.7 — Publish the app
 
 At the top of the dashboard, find the toggle that says **Development** and switch it to **Live**. (On some layouts this is a **Publish** button instead.)
 
@@ -535,7 +586,7 @@ Check for: a missing `/auth/callback` on the end, `http://` instead of `https://
 <details>
 <summary><b>Login works, but comments and messages never trigger anything</b></summary>
 
-Your app is still in **Development** mode — step 3.6. Instagram returns empty lists rather than an error, so nothing appears broken.
+Your app is still in **Development** mode — step 3.7. Instagram returns empty lists rather than an error, so nothing appears broken.
 </details>
 
 <details>
@@ -582,9 +633,217 @@ curl -X POST https://chatmany.abc123.workers.dev/config/import \
   --data @config.json
 ```
 
-Either way, the polling cron (every minute, checking at most every ~90 seconds) now watches that media. Comment a keyword from a **second** test account and you'll get: opening DM → (follow gate) → (email ask) → reward, per your toggles.
+Your automation is now live. With step 3.5 done, Meta pushes each new comment to you the moment it happens, so the DM goes out within a second or two. The once-a-minute cron keeps running underneath as a safety net, catching anything a push delivery drops. Comment a keyword from a **second** test account and you'll get: opening DM → (follow gate) → (email ask) → reward, per your toggles.
 
-> ✅ **Final end-to-end verification, before you consider this ready to show anyone else:** comment your keyword from the second account, wait up to ~90 seconds, and confirm the opening DM actually lands in that account's **Requests** folder (not Primary — that's expected for a first-time commenter, see the postback-button note under [How it works](#how-it-works)). Then work through the full funnel yourself (tap the button → follow-gate if enabled → email-ask if enabled → reward) and check the **Dashboard** tab shows those events incrementing in real time. If the DM never arrives, re-check the Publish step (3.6) first — an empty comments feed is the most common cause, not a config mistake in the campaign itself.
+> ✅ **Final end-to-end verification, before you consider this ready to show anyone else:** comment your keyword from the second account and confirm the opening DM lands within a second or two (if it consistently takes ~60 seconds, push isn't arriving and the cron is doing the work — see [Part 6](#part-6--confirm-instant-delivery-is-on)), and that it lands in that account's **Requests** folder (not Primary — that's expected for a first-time commenter, see the postback-button note under [How it works](#how-it-works)). Then work through the full funnel yourself (tap the button → follow-gate if enabled → email-ask if enabled → reward) and check the **Dashboard** tab shows those events incrementing in real time. If the DM never arrives, re-check the Publish step (3.7) first — an empty comments feed is the most common cause, not a config mistake in the campaign itself.
+
+---
+
+### Part 6 — Confirm instant delivery is on
+
+Step 3.5 is what makes delivery instant. This part is how you check it actually took, and what to
+do if it didn't. **Nothing here is optional configuration** — it's verification.
+
+#### 6.1 — Check your account is subscribed
+
+Registering the callback URL in 3.5 subscribed your **app**. Your **account** also has to be
+subscribed, and those are two different things. This is the single most common reason someone gets
+"the webhook verified fine but nothing ever arrives".
+
+chatmany subscribes your account automatically every time you connect Instagram, so Part 4 normally
+handles it. To confirm:
+
+```bash
+curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://chatmany.abc123.workers.dev/admin/webhook
+```
+
+Look for `"subscribed": true`. If it says `false` — most likely because you connected Instagram
+before doing step 3.5 — subscribe it now:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://chatmany.abc123.workers.dev/admin/webhook
+```
+
+Disconnecting and reconnecting from the dashboard does the same thing.
+
+#### 6.2 — If DMs still take ~60 seconds
+
+That's the signal push isn't arriving and the cron is covering for it. In order of likelihood:
+
+1. **The account isn't subscribed** — 6.1 above.
+2. **Only one field is ticked** in 3.5. You need `comments` *and* `messages`.
+3. **The callback URL is wrong** — it must end in `/webhook`, over `https`, with no trailing slash.
+4. **The app isn't published** — step 3.7. In Development mode Instagram returns empty lists
+   rather than errors, so nothing looks broken.
+
+Nobody is lost while you sort this out. The cron is still polling every 60 seconds underneath, so
+leads keep being answered — just slower.
+
+#### 6.3 — Do not change `MODE`
+
+Leave `MODE = "polling"` in `wrangler.toml`.
+
+This trips people up because the setting is called `MODE` and it accepts the value `"webhook"`, so
+it reads like the switch for what you set up in 3.5. **It isn't.** Pushed events are verified and
+processed the moment they arrive under either setting. `MODE` only controls how often the cron runs
+underneath.
+
+`MODE = "polling"` plus a registered callback URL is not a half-measure — it is the best available
+configuration, and it is what this guide sets up. Push makes delivery instant; the 60-second poll
+stays underneath as a safety net. Webhooks are fire-and-forget: Meta retries a delivery a few times
+and then gives up, so a redeploy or a brief blip would otherwise lose those leads with nothing to
+notice. Running both is safe, because an already-handled comment is recognised and skipped rather
+than DMed twice.
+
+Switching to `MODE = "webhook"` makes nothing faster. It only makes that safety net 15× slower — if
+push ever breaks, you'd wait 15 minutes to find out instead of 60 seconds.
+
+---
+
+## Updating an existing install
+
+Already running chatmany and want the newest version? You do **not** need to redo Setup. This takes
+about five minutes.
+
+### 🤖 Want an AI to do it for you?
+
+Open **ChatGPT** — or **Codex**, if you'd rather it run the commands — and paste the block below.
+It knows the two things that go wrong.
+
+**Copy everything between the lines:**
+
+---
+
+```text
+I already have "chatmany" installed and running — a self-hosted Instagram
+comment-to-DM tool on my own Cloudflare account. I want to update it to the
+latest version. I am not a programmer.
+
+The update guide is the "Updating an existing install" section of this README:
+https://github.com/ryanlaiyanip-ctrl/chatmany
+
+Please read that section first, then walk me through it ONE STEP AT A TIME,
+waiting for me to confirm each step worked before giving me the next. If I
+paste an error, diagnose it and give me the fix.
+
+Four things matter, and two of them will bite us if you get them wrong:
+
+1. DATABASE FIRST, DEPLOY SECOND. Run the database migration and confirm it
+   succeeded BEFORE deploying the new code. Never the other way round. If new
+   code runs against an un-migrated database, the failure is silent and
+   expensive: someone who comments still receives their opening DM, but no
+   record of them is written, so when they tap the button nothing happens,
+   ever, and no error appears anywhere. Migrating first is always safe,
+   because the currently running version ignores anything new.
+
+2. `git pull` WILL refuse to merge, for everyone. Setup had me edit two lines
+   in wrangler.toml (database_id and REDIRECT_URI), so my copy always differs
+   from the new one. Do NOT try to teach me git conflict resolution. Instead:
+   print those two lines first so I can save them, discard my copy of that one
+   file, pull, then have me paste the two values back in. That is what the
+   guide says to do.
+
+3. Do NOT change MODE in wrangler.toml. Leave it as "polling". It sounds like
+   the switch for instant delivery and it is not — it only sets how often the
+   backup poll runs. Setting it to "webhook" makes things SLOWER, not faster.
+   Instant delivery comes from registering a webhook callback URL with Meta.
+
+4. Updating touches only the code. My secrets live in Cloudflare and my
+   campaigns and contacts live in the database — do not tell me to re-enter
+   secrets or rebuild campaigns, and do not tell me to delete or recreate the
+   database. People part-way through a funnel keep their place.
+
+At the end, help me confirm it worked, and check whether instant delivery is
+switched on for my install. If it is not, offer to walk me through turning it
+on — it is a one-time job in the Meta dashboard and takes about five minutes.
+
+Start by asking me to confirm chatmany is currently working, and to have my
+Cloudflare login and my chatmany folder ready.
+```
+
+---
+
+> ### ⚠️ The one rule: database first, deploy second.
+>
+> A new version can expect a database column your database doesn't have yet. Deploy before you
+> migrate and the failure is nasty and silent: a new commenter still gets their opening DM, but the
+> record of them is never written — so when they tap the button, nothing happens, forever, and
+> nothing shows an error. Migrating first is always safe, because the running version simply
+> ignores anything new. **Never do these two steps the other way round.**
+
+### Step 1 — Write down the values you changed
+
+Setup had you edit exactly two lines in `wrangler.toml`. Print them:
+
+```bash
+grep -E '^database_id|^REDIRECT_URI' wrangler.toml
+```
+
+Copy both lines into your note. You'll paste them back in Step 2.
+
+> If you also changed `MODE` or `POLL_INTERVAL_SECONDS`, note those too — though if you changed
+> `MODE` to `"webhook"`, take this as your chance to put it back to `"polling"`, and read
+> [Part 6.3](#63--do-not-change-mode) for why.
+
+### Step 2 — Get the new code
+
+Your copy of `wrangler.toml` differs from the new one, so git will refuse to merge them. Since you
+saved both values in Step 1, the simplest thing is to take the new file and re-paste them:
+
+```bash
+git checkout -- wrangler.toml
+git pull
+npm install
+```
+
+Now open `wrangler.toml` and put your two lines back — same as steps 2.5 and 3.1, using the values
+from your note. Everything else in the file is meant to be the new version.
+
+> **Nothing else you own lives in the repo.** Your secrets are stored in Cloudflare, and your
+> campaigns and contacts are in the database. Pulling new code touches neither.
+
+### Step 3 — Update the database
+
+```bash
+npm run db:migrate:remote
+```
+
+It prints which migrations it applied, or says there was nothing to do. Either is fine — what
+matters is that it ran without an error before you go to Step 4.
+
+**Nobody mid-funnel is disturbed by this.** Existing conversations keep their place, and buttons
+already sitting in people's inboxes keep working after the update.
+
+### Step 4 — Deploy
+
+```bash
+npm run deploy
+```
+
+### Step 5 — Check it worked
+
+```bash
+curl https://chatmany.abc123.workers.dev/health
+```
+
+Should print `{"ok":true,"mode":"polling"}` — use your own address.
+
+Then confirm push is still wired up, which also tells you whether delivery is instant:
+
+```bash
+curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://chatmany.abc123.workers.dev/admin/webhook
+```
+
+Want `"subscribed": true`. If it's `false`, or the whole thing 404s, see
+[Part 6](#part-6--confirm-instant-delivery-is-on).
+
+### If you installed before instant delivery existed
+
+Older installs were polling-only, so DMs took up to a minute. Nothing about updating turns that on
+by itself — push needs a callback URL registered with Meta, which is a one-time job in their
+dashboard. Do [step 2.7's `WEBHOOK_VERIFY_TOKEN`](#27--set-your-four-secret-values) and
+[step 3.5](#35--turn-on-instant-delivery), then [Part 6](#part-6--confirm-instant-delivery-is-on)
+to confirm. Five minutes, and DMs land in a second or two instead of up to sixty.
 
 ---
 
@@ -599,11 +858,17 @@ Either way, the polling cron (every minute, checking at most every ~90 seconds) 
 - **Keyword match is whole-word, case-insensitive.** Keyword `ai` fires on `"I like this AI"` or `"i like this ai"` but never on `"fair"`.
 - **Liking a comment is not possible.** Instagram's API has no `/likes` edge on a comment — the only comment operations it supports are read, reply, delete, hide/unhide, and enable/disable. The builder shows this toggle greyed out rather than letting you switch on something that silently does nothing.
 - **Opening DM is a private reply to the comment** — the only sanctioned way to open a chat with a fresh commenter (valid up to 7 days, once per comment). It uses a **postback button** so it survives the Requests folder.
-- **Follow-gate is self-attestation.** There is no official API to check whether someone follows you, so tapping "I followed" always advances; an opt-in `verify_follow_count` mode adds a weak follower-count heuristic instead.
-- **Email capture** uses Instagram's native `user_email` quick-reply chip, with a typed-reply fallback — an invalid reply gets re-asked instead of silently ignored, and the reward is only ever sent once a real email is captured.
+- **Follow-gate is a nudge, not a check.** No Instagram API can tell you whether a specific person follows you — there is no follower list and no relationship edge in the scopes this app holds. So the gate asks them to follow and gives them a button that says "I followed"; tapping it always advances. The wording is the whole mechanism: being asked to press *I followed* is what prompts people to actually go and follow. It is sent as a **postback button**, not a quick-reply chip, so it doesn't vanish the moment they type or leave the thread.
+- **Button labels are capped at 20 characters.** Instagram rejects a longer postback title outright, and that rejection is definitive — the send would be retried on every poll forever without ever succeeding. The builder stops you typing past the limit, and the engine trims defensively for campaigns imported from `config.json`.
+- **Each button carries its own campaign — when the press arrives by webhook.** Push delivers the postback payload, so a press says which automation it belongs to, and someone who commented on two of your posts and has two funnels open advances only the funnel whose button they pressed. Polling never sees the payload, so a press received that way is indistinguishable from a typed reply. A *typed* reply carries no such information either way and still advances every open funnel — Instagram doesn't say which one it answers, and there is nothing to infer it from.
+- **Email capture** uses Instagram's native `user_email` quick-reply chip, with a typed-reply fallback — an address is pulled out of a longer sentence if need be, and the reward is only ever sent once a real one is captured. A reply that isn't an address gets re-asked, but **at most twice**: repeatedly DMing someone who isn't engaging is the pattern platform spam detection looks for, and attachments count too, since a photo or sticker arrives with no text. Hitting the cap only stops the nudging — an address sent later is still captured and still delivers.
 - **Idempotent everywhere**, including across overlapping poll invocations. A comment is processed exactly once and a person gets exactly one DM per campaign, even across re-polls, webhook retries, or an overlapping cron tick racing a manual `/admin/poll` call.
 - **Rate-safe.** Sends are paced with a throttle + exponential backoff on 429s, plus a conservative account-wide hourly cap on opening DMs.
-- **Webhook mode (optional).** Set `MODE = "webhook"` to receive push events instead of polling (verified `X-Hub-Signature-256`). Polling is the guaranteed baseline; webhooks are a latency upgrade.
+- **Instant delivery does not depend on `MODE`.** If a callback URL is registered in your Meta app, pushed events are verified and handed to the engine the moment they arrive — whatever `MODE` is set to. Every request is authenticated against an `X-Hub-Signature-256` HMAC of your app secret; unsigned or mis-signed requests are rejected. Push also carries the postback payload, which polling never sees.
+  - **`MODE` governs the cron, and only the cron.** `"polling"` polls every `POLL_INTERVAL_SECONDS` — `wrangler.toml` ships `60`, which is as fast as polling goes, since Cloudflare crons fire at most once a minute. (Delete the line and the code falls back to `90`; values below `30` are floored at `30`.) `"webhook"` drops the cron to the slower `WEBHOOK_RECONCILE_SECONDS` sweep (900 by default; `"off"` disables it). Neither setting decides whether pushed events are processed.
+  - **The best setup for most people is `MODE = "polling"` *plus* a configured callback URL.** Push makes delivery instant; the 60-second poll sits underneath and catches anything a delivery drops. Webhooks are fire-and-forget — Meta retries a few times and then gives up, so a redeploy or a brief error loses those leads with nothing to notice. Running both is safe: the idempotency ledgers recognise an already-handled comment and skip it.
+  - Three things must line up before push works at all: the `WEBHOOK_VERIFY_TOKEN` secret, the callback URL registered in the Meta dashboard, and the **account** subscribed to the app. chatmany subscribes the account for you every time you connect Instagram, whatever `MODE` says; `GET /admin/webhook` reports whether it took.
+  - Switch `MODE` to `"webhook"` only once push is confirmed working, and know the tradeoff: it makes the safety net roughly 15× slower. If push ever breaks, you wait 15 minutes to find out instead of 60 seconds.
 - **Archiving is non-destructive.** It stops a campaign and hides it from the main list without deleting its history — unlike Delete, which cascades and removes everything permanently.
 
 ## Cost

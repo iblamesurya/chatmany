@@ -192,7 +192,10 @@ function connectBanner() {
   const s = store.status || {};
   if (s.connected && !s.token_expired) return "";
   const msg = s.connected && s.token_expired ? "Your Instagram token expired — reconnect to resume." : "No Instagram account connected yet.";
-  return `<div class="banner">${msg} <a href="/auth/authorize">Connect Instagram</a></div>`;
+  // /auth/authorize is owner-gated. A link navigation cannot send an Authorization header, so the
+  // token goes in the query; the redirect it returns sets Referrer-Policy: no-referrer.
+  const authorizeUrl = `/auth/authorize?token=${encodeURIComponent(store.token)}`;
+  return `<div class="banner">${msg} <a href="${authorizeUrl}">Connect Instagram</a></div>`;
 }
 
 /**
@@ -536,7 +539,7 @@ function defaultDraft() {
     copy: {
       opening: "Hey! Tap below to grab the link 👇",
       opening_button: "Send it to me",
-      follow_gate: "Follow us first so you don't miss the next drop 🙌",
+      follow_gate: "Make sure you're following so you don't miss the next one 🙌 Not following yet? Follow, then tap below.",
       follow_button: "✅ I followed",
       email_ask: "Want it in your inbox too? Tap your email or reply with it.",
       delivery: "Here you go 🎉 {reward}",
@@ -710,13 +713,13 @@ function renderSections() {
         <label class="switch"><input type="checkbox" id="opening_enabled" ${d.opening_enabled ? "checked" : ""}/><span class="slider"></span></label></div>
       <div id="opening_wrap" style="${d.opening_enabled ? "" : "display:none"}">
         <label class="field"><span class="label">Opening message</span><textarea id="c_opening">${esc(d.copy.opening)}</textarea></label>
-        <label class="field"><span class="label">Button label</span><input type="text" id="c_opening_button" value="${esc(d.copy.opening_button)}"/></label>
+        <label class="field"><span class="label">Button label</span><input type="text" id="c_opening_button" maxlength="20" value="${esc(d.copy.opening_button)}"/><span class="hint">Instagram allows 20 characters on a button.</span></label>
       </div>
       <div class="toggle-row"><div><div class="tr-title">Ask them to follow you first</div><div class="tr-sub">Self-attestation — the tap advances (the API can’t verify a specific follow).</div></div>
         <label class="switch"><input type="checkbox" id="check_follow" ${d.check_follow ? "checked" : ""}/><span class="slider"></span></label></div>
       <div id="follow_wrap" style="${d.check_follow ? "" : "display:none"}">
         <label class="field"><span class="label">Follow message</span><textarea id="c_follow_gate">${esc(d.copy.follow_gate)}</textarea></label>
-        <label class="field"><span class="label">Follow button label</span><input type="text" id="c_follow_button" value="${esc(d.copy.follow_button)}"/></label>
+        <label class="field"><span class="label">Follow button label</span><input type="text" id="c_follow_button" maxlength="20" value="${esc(d.copy.follow_button)}"/><span class="hint">Instagram allows 20 characters on a button.</span></label>
       </div>
       <div class="toggle-row"><div><div class="tr-title">Ask for their email</div><div class="tr-sub">Uses Instagram’s email chip, with a typed-reply fallback.</div></div>
         <label class="switch"><input type="checkbox" id="ask_email" ${d.ask_email ? "checked" : ""}/><span class="slider"></span></label></div>
@@ -870,8 +873,9 @@ function renderPreview() {
       blocks.push(`<div class="dm-note">Opening DM is off — the funnel won’t start.</div>`);
     }
     if (d.check_follow) {
+      // Rendered as a button, not a quick-reply chip, to match what the engine actually sends.
       blocks.push(`<div class="bubble in">${esc(d.copy.follow_gate)}</div>`);
-      blocks.push(`<div class="qr"><span class="pill">${esc(d.copy.follow_button || "✅ I followed")}</span></div>`);
+      blocks.push(`<div class="dm-btn">${esc(d.copy.follow_button || "✅ I followed")}</div>`);
       blocks.push(`<div class="bubble out">${esc(d.copy.follow_button || "✅ I followed")}</div>`);
     }
     if (d.ask_email) {
